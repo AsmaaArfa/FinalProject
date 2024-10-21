@@ -6,7 +6,6 @@ phases:
       - npm install
   build:
     commands:
-      - ulimit -n 4096  # Increase file descriptor limit (adjust the number if needed)
       - npm run build  # Builds the project
 artifacts:
   files:
