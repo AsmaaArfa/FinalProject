@@ -4,6 +4,7 @@ phases:
   install:
     commands:
       - npm install
+      - npm run audit fix --force
   build:
     commands:
       - ulimit -n 4096  # Increase file descriptor limit (adjust the number if needed)
