@@ -24,7 +24,7 @@ artifacts:
   base-directory: build # Location of the built React app
 
 environment:
-  compute-type: BUILD_GENERAL1_SMALL # Optional: specify the instance size
+  compute-type: BUILD_GENERAL1_MEDIUM # Optional: specify the instance size
   variables:
     REACT_ENV: "production" # Optional: add custom environment variables
 cache:
