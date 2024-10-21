@@ -3,8 +3,10 @@ version: 0.2
 phases:
   install:
     commands:
+      - echo Increasing the limit of open files...
+      - ulimit -n 4096
       - echo Installing dependencies...
-      - npm ci
+      - npm install
   pre_build:
     commands:
       - echo Starting pre-build phase...
