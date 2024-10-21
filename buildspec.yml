@@ -3,30 +3,11 @@ version: 0.2
 phases:
   install:
     commands:
-      - echo Increasing the limit of open files...
-      - echo Installing dependencies...
       - npm install
-  pre_build:
-    commands:
-      - echo Starting pre-build phase...
-      - npm run lint # Optional: Run linter to ensure code quality
   build:
     commands:
-      - echo Building the React app...
-      - npm run build
-  post_build:
-    commands:
-      - echo Build completed successfully.
-
+      - npm run build  # Builds the project
 artifacts:
   files:
     - '**/*'
-  base-directory: build # Location of the built React app
-
-environment:
-  compute-type: BUILD_GENERAL1_MEDIUM # Optional: specify the instance size
-  variables:
-    REACT_ENV: "production" # Optional: add custom environment variables
-cache:
-  paths:
-    - node_modules/**/*
+  base-directory: build  # Directory with output files (e.g., React app)
