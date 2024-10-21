@@ -3,7 +3,8 @@ version: 0.2
 phases:
   install:
     commands:
-      - npm install
+      - ulimit -n 4096  # Increase file descriptor limit
+      - npm install --verbose
   build:
     commands:
       - npm run build  # Builds the project
