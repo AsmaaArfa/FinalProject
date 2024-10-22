@@ -1,0 +1,367 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template to create an S3 bucket for a React project,
+  a CloudFront distribution connected to the S3 bucket,
+  a Lambda function, and an API Gateway to trigger the Lambda function.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket to store the React project.
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: '^[a-z0-9.-]+$'
+    ConstraintDescription: Must contain only lowercase letters, numbers, dots, and hyphens.
+    Default: final-project-cs516-bucket-2024-5
+  ApiUrl:
+    Type: String
+    Description: "The API URL for the React app."
+    Default: "Invoke URL in API Gateway"
+
+Resources:
+  # Origin Access Identity for CloudFront
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for CloudFront distribution of ${BucketName}"
+
+  # S3 Bucket for React Project
+  ReactS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      AccessControl: Private
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Ref BucketName
+
+  # S3 Bucket Policy to Allow CloudFront OAI Access
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReactS3Bucket
+      PolicyDocument:
+        Version: '2008-10-17'
+        Id: PolicyForCloudFrontPrivateContent
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal: "*"
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: 'arn:aws:cloudfront::038462766206:distribution/E3ALLVLI3KIG55'
+
+  # CloudFront Distribution
+  ReactCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt ReactS3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOAI}'
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+            Headers:
+              - Origin
+              - Access-Control-Request-Headers
+              - Access-Control-Request-Method
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponsePagePath: /index.html
+            ResponseCode: 200
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 404
+            ResponsePagePath: /index.html
+            ResponseCode: 200
+            ErrorCachingMinTTL: 300
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+
+  # DynamoDB Table for Users
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UsersTable
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  # Lambda Function
+  FinalProjectApiCF:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FinalProjectApiCF
+      Runtime: nodejs20.x
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+
+          const dynamoDB = new DynamoDBClient({ region: "us-east-1" });
+
+          export const handler = async (event) => {
+            const { path, httpMethod, body } = event;
+            const parsedBody = JSON.parse(body);
+
+            const headers = {
+              "Access-Control-Allow-Origin": "*",
+              "Access-Control-Allow-Headers": "*",
+              "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
+            };
+
+            if (httpMethod === "OPTIONS") {
+              return {
+                statusCode: 200,
+                headers,
+              };
+            }
+
+            if (httpMethod === "POST" && path === "/signup") {
+              const { email, password, name } = parsedBody;
+              const params = {
+                TableName: "UsersTable",
+                Item: {
+                  email: { S: email },
+                  password: { S: password },
+                  name: { S: name },
+                },
+              };
+
+              try {
+                await dynamoDB.send(new PutItemCommand(params));
+                return {
+                  statusCode: 200,
+                  headers,
+                  body: JSON.stringify({ message: "User signed up successfully" }),
+                };
+              } catch (error) {
+                return {
+                  statusCode: 500,
+                  headers,
+                  body: JSON.stringify({ error: "Could not sign up user" }),
+                };
+              }
+            }
+
+            if (httpMethod === "POST" && path === "/login") {
+              const { email, password } = parsedBody;
+              const params = {
+                TableName: "UsersTable",
+                Key: {
+                  email: { S: email },
+                },
+              };
+
+              try {
+                const data = await dynamoDB.send(new GetItemCommand(params));
+                if (data.Item && data.Item.password.S === password) {
+                  return {
+                    statusCode: 200,
+                    headers,
+                    body: JSON.stringify({ message: "User logged in successfully" }),
+                  };
+                } else {
+                  return {
+                    statusCode: 401,
+                    headers,
+                    body: JSON.stringify({ error: "Invalid credentials" }),
+                  };
+                }
+              } catch (error) {
+                return {
+                  statusCode: 500,
+                  headers,
+                  body: JSON.stringify({ error: "Could not log in user" }),
+                };
+              }
+            }
+
+            if (httpMethod === "POST" && path === "/upload") {
+              try {
+                return {
+                  statusCode: 200,
+                  headers,
+                  body: JSON.stringify({ message: "Image uploaded successfully" }),
+                };
+              } catch (error) {
+                return {
+                  statusCode: 500,
+                  headers,
+                  body: JSON.stringify({ error: "Could not upload image" }),
+                };
+              }
+            }
+
+            return {
+              statusCode: 400,
+              headers,
+              body: JSON.stringify({ error: "Unsupported route" }),
+            };
+          };
+      Description: List Amazon S3 buckets in us-east-1.
+      TracingConfig:
+        Mode: Active
+
+  # IAM Role for Lambda Execution
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaBasicExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - s3:ListAllMyBuckets
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  # API Gateway to Trigger Lambda
+  FinalProjectApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: FinalProjectApiGateway
+
+  SignupApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt FinalProjectApiGateway.RootResourceId
+      PathPart: signup
+      RestApiId: !Ref FinalProjectApiGateway
+
+  SignupApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref SignupApiResource
+      RestApiId: !Ref FinalProjectApiGateway
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FinalProjectApiCF.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+
+  LoginApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt FinalProjectApiGateway.RootResourceId
+      PathPart: login
+      RestApiId: !Ref FinalProjectApiGateway
+
+  LoginApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref LoginApiResource
+      RestApiId: !Ref FinalProjectApiGateway
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FinalProjectApiCF.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+
+  UploadApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt FinalProjectApiGateway.RootResourceId
+      PathPart: upload
+      RestApiId: !Ref FinalProjectApiGateway
+
+  UploadApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref UploadApiResource
+      RestApiId: !Ref FinalProjectApiGateway
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FinalProjectApiCF.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+
+  # Lambda Permission for API Gateway
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt FinalProjectApiCF.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${FinalProjectApiGateway}/*/POST/signup
+
+Outputs:
+  S3BucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref ReactS3Bucket
+  CloudFrontDistributionID:
+    Description: ID of the CloudFront distribution
+    Value: !Ref ReactCloudFrontDistribution
+  CloudFrontDomainName:
+    Description: Domain name of the CloudFront distribution
+    Value: !GetAtt ReactCloudFrontDistribution.DomainName
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref FinalProjectApiCF
+  ApiGatewayUrl:
+    Description: URL of the API Gateway endpoint
+    Value: !Sub
+      - https://${FinalProjectApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod
+      - {}
