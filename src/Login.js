@@ -11,7 +11,7 @@ function Login() {
     e.preventDefault();
     try {
       // Replace with your AWS Lambda endpoint
-      const response = await axios.post("https://5nn2xk9qie.execute-api.us-east-1.amazonaws.com/dev/login", {
+      const response = await axios.post("https://ia7vd5dcti.execute-api.us-east-1.amazonaws.com/dev/login", {
         email,
         password,
       });
